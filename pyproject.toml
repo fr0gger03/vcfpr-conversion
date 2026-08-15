@@ -1,0 +1,18 @@
+[project]
+name = "python"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "certifi==2024.7.4",
+    "charset-normalizer==3.1.0",
+    "idna==3.7",
+    "prettytable==3.8.0",
+    "pyvim>=3.0.3",
+    "pyvmomi>=9.1.0.0",
+    "requests==2.33.0",
+    "rich>=15.0.0",
+    "urllib3==2.7.0",
+    "wcwidth==0.2.6",
+]
