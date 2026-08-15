@@ -100,6 +100,11 @@ Before moving or copying replica files, ESXi file locks held by Zerto VRAs must 
 
 ### Step 3: Copy VMDKs to VCF Seed Directories
 
+Examine your vSphere datastore to confirm current location of replica disks
+
+![alt text](images/move-vmdk-04.png)
+
+
 Run Script 2 after Zerto has released the file locks.
 
 1. Open `02_vcf_seed_copy.py` and update your vCenter credentials:
@@ -117,7 +122,6 @@ DATACENTER_NAME = "Datacenter-DR"
 uv run 02_vcf_seed_copy.py
 
 ```
-![alt text](images/move-vmdk-04.png)
 
 3. Confirm the prompt for each disk. The script creates the target `[Datastore] VM_Name` directory on vSAN/VMFS and initiates a `VirtualDiskManager` copy task.
 
