@@ -60,6 +60,9 @@ pip install requests pyvmomi rich
 
 ## Step-by-Step Usage
 
+### Prerequisite: Setup Zerto Keycloak client token
+See [keycloak.md](keycloak.md) for instructions.
+
 ### Step 1: Discover Zerto Replicas & Export Manifest
 
 Run Script 1 while Zerto protection is still active.
