@@ -81,7 +81,9 @@ ZVM_CLIENT_SECRET = "YourClientSecretHere"
 uv run 01_zerto_discover_and_export.py
 
 ```
+![alt text](images/move-vmdk-01.png)
 
+![alt text](images/move-vmdk-02.png)
 
 3. Inspect the terminal output and verify that `zerto_seeds_manifest.json` has been created.
 
@@ -93,6 +95,8 @@ Before moving or copying replica files, ESXi file locks held by Zerto VRAs must 
 2. Select the VPG(s) to migrate and click **Delete VPG** (or remove specific VMs).
 3. **CRITICAL:** Select **"Keep target disks"** when prompted.
 4. Confirm deletion. Zerto will detach the VMDKs from the target VRA.
+
+![alt text](images/zerto-delete-vpg.png)
 
 ### Step 3: Copy VMDKs to VCF Seed Directories
 
@@ -113,9 +117,11 @@ DATACENTER_NAME = "Datacenter-DR"
 uv run 02_vcf_seed_copy.py
 
 ```
-
+![alt text](images/move-vmdk-04.png)
 
 3. Confirm the prompt for each disk. The script creates the target `[Datastore] VM_Name` directory on vSAN/VMFS and initiates a `VirtualDiskManager` copy task.
+
+![alt text](images/move-vmdk-04.png)
 
 ---
 

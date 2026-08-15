@@ -23,13 +23,14 @@ https://<ZVM_IP>/auth/admin/
 
 ```
 
-
 * Log in using your ZVMA system administrator credentials.
 
+![alt text](images/keycloak-01.png)
 
 2. **Select the Zerto Realm**
 * Ensure you are in the **`zerto`** realm (selectable from the top-left realm dropdown menu).
 
+![alt text](images/keycloak-02.png)
 
 3. **Create a New OAuth Client**
 * In the left navigation panel, click **Clients**.
@@ -38,6 +39,7 @@ https://<ZVM_IP>/auth/admin/
 * **Client ID:** `zerto-python-script` (or a descriptive name of your choice)
 * **Client Protocol:** `openid-connect`
 
+![alt text](images/keycloak-03.png)
 
 * Click **Save**.
 
@@ -48,7 +50,8 @@ https://<ZVM_IP>/auth/admin/
 * **Service Accounts Enabled:** Toggle to `ON` (This enables the `client_credentials` grant type required for headless script authentication)
 * **Direct Access Grants Enabled:** Toggle to `OFF`
 
-
+![alt text](images/keycloak-04.png)
+![alt text](images/keycloak-05.png)
 * Click **Save**.
 
 
@@ -56,7 +59,7 @@ https://<ZVM_IP>/auth/admin/
 * Click the **Credentials** tab at the top of the client configuration screen.
 * Locate the **Secret** field. Copy this value and store it securely.
 
-
+![alt text](images/keycloak-06.png)
 
 ---
 
