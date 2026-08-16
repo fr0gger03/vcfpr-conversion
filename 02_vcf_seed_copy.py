@@ -2,17 +2,31 @@
 
 import json
 import ssl
+
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
 from rich.console import Console
 from rich.prompt import Confirm
 
-# --- vCenter Configuration ---
-VCENTER_IP = "10.42.7.200"
-VCENTER_USER = "administrator@vsphere.local"
-VCENTER_PASSWORD = "h$cilV2u64r7C@^9zTab"
-DATACENTER_NAME = "consolidated-sandbox-dc01"  # vCenter Datacenter Object Name
-MANIFEST_FILE = "zerto_seeds_manifest.json"
+import config
+
+# --- vCenter Configuration (loaded from .env — see .env.example) ---
+try:
+    _env = config.require(
+        "VCENTER_IP",
+        "VCENTER_USER",
+        "VCENTER_PASSWORD",
+        "VCENTER_DATACENTER",
+    )
+except config.ConfigError as exc:
+    config.fail(str(exc))
+
+VCENTER_IP = _env["VCENTER_IP"]
+VCENTER_USER = _env["VCENTER_USER"]
+VCENTER_PASSWORD = _env["VCENTER_PASSWORD"]
+DATACENTER_NAME = _env["VCENTER_DATACENTER"]  # vCenter Datacenter Object Name
+MANIFEST_FILE = config.MANIFEST_FILE
+VERIFY_SSL = config.VERIFY_SSL
 
 console = Console()
 
@@ -47,7 +61,11 @@ def main():
     # 2. Connect to vCenter
     console.print(f"[bold green]Connecting to vCenter {VCENTER_IP}...[/bold green]")
     try:
-        ssl_context = ssl._create_unverified_context()
+        ssl_context = (
+            ssl.create_default_context()
+            if VERIFY_SSL
+            else ssl._create_unverified_context()
+        )
         si = SmartConnect(
             host=VCENTER_IP,
             user=VCENTER_USER,

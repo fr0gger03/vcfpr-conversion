@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 import json
+
 import requests
 from rich.console import Console
 from rich.table import Table
 
-# --- ZVMA Configuration ---
-ZVM_IP = "10.42.7.150"
-ZVM_CLIENT_ID = "zerto-python-script"
-ZVM_CLIENT_SECRET = "xxMCsl9izJbizLTvlqTEWKZTubPxOYoh"
-MANIFEST_FILE = "zerto_seeds_manifest.json"
+import config
+
+# --- ZVMA Configuration (loaded from .env — see .env.example) ---
+try:
+    _env = config.require("ZVM_IP", "ZVM_CLIENT_ID", "ZVM_CLIENT_SECRET")
+except config.ConfigError as exc:
+    config.fail(str(exc))
+
+ZVM_IP = _env["ZVM_IP"]
+ZVM_CLIENT_ID = _env["ZVM_CLIENT_ID"]
+ZVM_CLIENT_SECRET = _env["ZVM_CLIENT_SECRET"]
+MANIFEST_FILE = config.MANIFEST_FILE
+VERIFY_SSL = config.VERIFY_SSL
 
 # Disable SSL warnings for self-signed certificates
-requests.packages.urllib3.disable_warnings()
+if not VERIFY_SSL:
+    requests.packages.urllib3.disable_warnings()
 base_url = f"https://{ZVM_IP}"
 console = Console()
 
@@ -43,7 +53,7 @@ def main():
                 "client_id": ZVM_CLIENT_ID,
                 "client_secret": ZVM_CLIENT_SECRET,
             },
-            verify=False,
+            verify=VERIFY_SSL,
         )
 
     token_resp = token_req.json()
@@ -56,13 +66,13 @@ def main():
     # 2. Fetch Zerto Metadata
     with console.status("[bold cyan]Querying VRAs, VMs, and Volumes..."):
         vras_data = requests.get(
-            f"{base_url}/v1/vras", headers=headers, verify=False
+            f"{base_url}/v1/vras", headers=headers, verify=VERIFY_SSL
         ).json()
         vms_data = requests.get(
-            f"{base_url}/v1/vms", headers=headers, verify=False
+            f"{base_url}/v1/vms", headers=headers, verify=VERIFY_SSL
         ).json()
         volumes_data = requests.get(
-            f"{base_url}/v1/volumes", headers=headers, verify=False
+            f"{base_url}/v1/volumes", headers=headers, verify=VERIFY_SSL
         ).json()
 
     # 3. Build Lookup Maps
