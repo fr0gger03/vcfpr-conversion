@@ -102,8 +102,6 @@ Before moving or copying replica files, ESXi file locks held by Zerto VRAs must 
 
 Examine your vSphere datastore to confirm current location of replica disks
 
-![alt text](images/move-vmdk-04.png)
-
 
 Run Script 2 after Zerto has released the file locks.
 
