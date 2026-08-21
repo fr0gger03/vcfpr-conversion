@@ -96,16 +96,12 @@ def main():
         for idx, item in enumerate(manifest, 1):
             ds_name = item["datastore"]
             vm_name = item["vm_name"]
-            
-            # Format explicitly as per your snippet: [datastore_name] folder/file
-            src_raw_path = item["source_raw_path"]
-            if not src_raw_path.startswith("["):
-                src_raw_path = f"[{ds_name}] {src_raw_path}"
 
-            # Destination Folder and File Paths
-            dest_folder_path = f"[{ds_name}] {vm_name}"
-            vmdk_filename = src_raw_path.rsplit("/", 1)[-1]
-            dest_vmdk_path = f"[{ds_name}] {vm_name}/{vmdk_filename}"
+            # Shared with 03_vmdk_descriptor_cleanup.py so both scripts agree
+            # on exactly where the seed disk ends up.
+            src_raw_path, dest_folder_path, dest_vmdk_path, vmdk_filename = (
+                config.compute_dest_paths(ds_name, vm_name, item["source_raw_path"])
+            )
 
             console.print(f"\n[bold underline]Volume {idx} of {len(manifest)}:[/bold underline]")
             console.print(f"  [cyan]VM Name:[/cyan]           {vm_name}")

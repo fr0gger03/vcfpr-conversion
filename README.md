@@ -22,6 +22,11 @@ By copying Zerto target disks into standard datastore folders (`[Datastore] VM_N
 ┌────────────────────────────────┐
 │ 3. Execute vSphere Seed Copy   │ ──► Run 02_vcf_seed_copy.py
 └────────────────────────────────┘     Server-side VMDK copy on vSAN/VMFS
+               │
+               ▼
+┌────────────────────────────────┐
+│ 4. Clean I/O Filter References │ ──► Run 03_vmdk_descriptor_cleanup.py
+└────────────────────────────────┘     Comments out stale ddb.iofilters/ddb.sidecars
 
 ```
 
@@ -89,7 +94,8 @@ Both scripts fail fast with a clear message listing every missing variable.
 
 * `01_zerto_discover_and_export.py` — Connects to Zerto ZVMA REST API, maps protected VMs to target ESXi hosts/VRAs, displays a formatted terminal table, and generates `zerto_seeds_manifest.json`.
 * `02_vcf_seed_copy.py` — Imports the manifest, connects to vCenter via `pyVmomi`, creates standard seed folders, and executes server-side VMDK copies.
-* `config.py` — Shared `.env` loader and required-variable validation.
+* `03_vmdk_descriptor_cleanup.py` — Imports the manifest, connects to vCenter, and comments out stale `ddb.iofilters` / `ddb.sidecars` references in each copied seed disk's descriptor file (see [Step 4](#step-4-clean-up-lingering-io-filter-references)).
+* `config.py` — Shared `.env` loader, required-variable validation, and the `[Datastore] VM_Name/VMDK` path logic shared by scripts 2 and 3.
 * `.env.example` — Template for the git-ignored `.env` file.
 
 ---
@@ -160,6 +166,38 @@ uv run 02_vcf_seed_copy.py
 3. Confirm the prompt for each disk. The script creates the target `[Datastore] VM_Name` directory on vSAN/VMFS and initiates a `VirtualDiskManager` copy task.
 
 ![alt text](images/move-vmdk-04.png)
+
+### Step 4: Clean Up Lingering I/O Filter References
+
+If the original Zerto replica had an I/O filter attached (e.g. `vmwarelwd`), the
+copied seed disk's descriptor can retain `ddb.iofilters` / `ddb.sidecars` lines
+that reference sidecar files no longer present on the target. Left in place,
+these can cause the eventual VM to fail to power on with an error like
+`Cannot open the disk '...' or one of the snapshot disks it depends on.`
+See [Broadcom KB 334555](https://knowledge.broadcom.com/external/article/334555/unable-to-power-on-vm-when-iofilters-is.html).
+
+Run Script 3 after Script 2 has finished copying:
+
+```bash
+# Preview what would change, without writing anything
+uv run 03_vmdk_descriptor_cleanup.py --dry-run
+
+# Apply, confirming each affected VM
+uv run 03_vmdk_descriptor_cleanup.py
+
+# Apply without per-VM prompts
+uv run 03_vmdk_descriptor_cleanup.py --yes
+
+```
+
+The script reuses the same `VCENTER_*` variables as Script 2 and connects to
+vCenter's datastore HTTP file-access API (via the same `pyVmomi` session) to
+read and rewrite only the small text descriptor file — never the large
+`-flat.vmdk` data extent. Matching lines are commented out (`#ddb.iofilters = ...`),
+not deleted, per the KB's guidance, and the script is safe to re-run: VMs with
+no matching lines, or already-commented lines, are reported and left untouched.
+No separate backup is made, since Script 2 already copied the seed disk out from
+the original Zerto target disk.
 
 ---
 

@@ -73,3 +73,29 @@ MANIFEST_FILE = get_env("MANIFEST_FILE", "zerto_seeds_manifest.json")
 
 # Set VERIFY_SSL=true once trusted certificates are installed on ZVM/vCenter.
 VERIFY_SSL = get_bool_env("VERIFY_SSL", False)
+
+
+def compute_dest_paths(
+    ds_name: str, vm_name: str, source_raw_path: str
+) -> tuple[str, str, str, str]:
+    """Derive vSphere path strings for a Zerto seed disk copy.
+
+    Given a manifest item's datastore name, VM name, and raw Zerto source
+    path, returns a 4-tuple of:
+        (normalized_src_path, dest_folder_path, dest_vmdk_path, vmdk_filename)
+
+    This is the single source of truth for the `[Datastore] VM_Name/VMDK`
+    naming convention used by 02_vcf_seed_copy.py (which performs the copy)
+    and 03_vmdk_descriptor_cleanup.py (which must target the exact same
+    destination file afterwards). Keeping this logic in one place prevents
+    the two scripts from silently drifting apart.
+    """
+    normalized_src_path = source_raw_path
+    if not normalized_src_path.startswith("["):
+        normalized_src_path = f"[{ds_name}] {normalized_src_path}"
+
+    dest_folder_path = f"[{ds_name}] {vm_name}"
+    vmdk_filename = normalized_src_path.rsplit("/", 1)[-1]
+    dest_vmdk_path = f"[{ds_name}] {vm_name}/{vmdk_filename}"
+
+    return normalized_src_path, dest_folder_path, dest_vmdk_path, vmdk_filename
