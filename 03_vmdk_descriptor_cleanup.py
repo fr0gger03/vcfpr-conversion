@@ -33,7 +33,7 @@ import sys
 from urllib.parse import quote, urlencode
 
 import requests
-from pyVim.connect import Disconnect, SmartConnect
+from pyvim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
 from rich.console import Console
 from rich.prompt import Confirm
