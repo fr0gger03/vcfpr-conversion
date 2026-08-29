@@ -92,12 +92,16 @@ def test_authenticate_raises_on_failed_session_request():
     asserting the adapter surfaces the failure instead of silently proceeding."""
     try:
         from testcontainers.core.container import DockerContainer
+        from testcontainers.core.waiting_utils import wait_for_logs
     except ImportError:
         pytest.skip("testcontainers not installed")
 
     try:
         container = DockerContainer("nginx:alpine").with_exposed_ports(80)
         container.start()
+        # Without this, the request below can race nginx's startup and get a
+        # connection reset instead of a real HTTP response (observed as flaky).
+        wait_for_logs(container, "ready for start up", timeout=30)
     except Exception as exc:  # Docker daemon not available/running
         pytest.skip(f"Docker not available: {exc}")
 
