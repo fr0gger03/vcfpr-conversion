@@ -151,6 +151,10 @@ class ZertoAdapter(BaseDREngine):
                     capacity_bytes=get_val(vol, "sizeInBytes", 0),
                     controller_index=get_val(vol, "controllerIndex", 0),
                     seed_file_path=dest_vmdk_path,
+                    # Zerto's replica disk physically lives here until `provision` copies
+                    # it to seed_file_path (see VCFProtectionAdapter.copy_and_prepare_seed).
+                    source_datastore=ds_name,
+                    source_raw_path=source_raw_path,
                 )
             )
 

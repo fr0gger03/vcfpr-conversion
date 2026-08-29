@@ -26,6 +26,11 @@ class Disk(BaseModel):
     capacity_bytes: int
     controller_index: int
     seed_file_path: str | None = None  # "[Datastore] VM_Name/VMDK" on the target datastore
+    # Present only for engines with a distinct pre-copy source location (e.g. Zerto's
+    # replica disks, which physically move during `provision`). Absent when the source
+    # engine's replica already lives at its final destination (e.g. RecoverPoint).
+    source_datastore: str | None = None
+    source_raw_path: str | None = None
 
 
 class VirtualMachine(BaseModel):

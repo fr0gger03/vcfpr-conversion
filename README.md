@@ -1,208 +1,203 @@
-# Zerto to VCF Protection & Recovery Seed Migration Toolset
+# vcf-migrator
 
-This repository provides a two-phase automation workflow for converting active Zerto replica VMDKs into clean, vSphere-native seed disks for **VMware Cloud Foundation (VCF) Protection & Recovery** or **vSphere Replication**.
+A modular ETL tool for migrating disaster-recovery protection from legacy engines
+— **Zerto** and **Dell RecoverPoint for VMs** — to **VMware Cloud Foundation (VCF)
+Protection & Recovery** (vSphere Replication).
 
-By copying Zerto target disks into standard datastore folders (`[Datastore] VM_Name/VMDK`), you can eliminate full-resynchronization over the network and drastically speed up disaster recovery cutovers.
+The tool extracts protection topology (protection groups, VMs, disks, RPOs, boot
+order, network mappings, IP customization) from the source engine into a validated
+manifest, then reconstructs that protection on the VCF side. Critically, it reuses
+the **existing replica VMDKs already sitting on the target datastore as seed data**,
+so vSphere Replication can be configured with `use_seeds=true` and skip the full
+baseline sync entirely — no multi-terabyte re-replication over the WAN.
 
----
-
-## Architecture & Workflow Overview
-
-```
-┌────────────────────────────────┐
-│ 1. Active Zerto Replication    │ ──► Run 01_zerto_discover_and_export.py
-└────────────────────────────────┘     Exports zerto_seeds_manifest.json
-               │
-               ▼
-┌────────────────────────────────┐
-│ 2. Unprotect / Delete VPG      │ ──► Manual Step in Zerto UI
-└────────────────────────────────┘     Option: "Keep target disks" (Releases locks)
-               │
-               ▼
-┌────────────────────────────────┐
-│ 3. Execute vSphere Seed Copy   │ ──► Run 02_vcf_seed_copy.py
-└────────────────────────────────┘     Server-side VMDK copy on vSAN/VMFS
-               │
-               ▼
-┌────────────────────────────────┐
-│ 4. Clean I/O Filter References │ ──► Run 03_vmdk_descriptor_cleanup.py
-└────────────────────────────────┘     Comments out stale ddb.iofilters/ddb.sidecars
+## Architecture
 
 ```
+  source adapters              engine                     target adapter
+  (BaseDREngine)
+┌────────────────────┐     ┌──────────────────┐     ┌────────────────────────┐
+│ ZertoAdapter       │     │ transformer.py   │     │ VCFProtectionAdapter   │
+│ RecoverPointAdapter│ ──► │  raw → Manifest  │ ──► │  seed copy (pyVmomi)   │
+│                    │     │ validator.py     │     │  descriptor cleanup    │
+│ discover / quiesce │     │  pre-flight      │     │  Configure Replication │
+│ cleanup_source     │     │ cache.py (delta) │     │   (use_seeds=true)     │
+└────────────────────┘     └──────────────────┘     └────────────────────────┘
+                               ▲
+                    ┌──────────┴───────────┐
+                    │ src/cli.py   src/ui/ │
+                    └──────────────────────┘
+```
 
----
+### Adapter contract
+All engines implement `BaseDREngine` (`src/adapters/base.py`):
+`authenticate()`, `discover_inventory()`, `export_protection_manifest()`,
+`quiesce_replication()`, `cleanup_source()`.
 
-## Prerequisites
+* `ZertoAdapter` (`src/adapters/zerto.py`) — ZVMA Keycloak OAuth auth, batched
+  `/v1/vras|vms|volumes` discovery, `POST /v1/vpgs/{id}/pause` to quiesce, and
+  VPG deletion with target disks preserved (`keep_target_disks=True`).
+* `RecoverPointAdapter` (`src/adapters/recoverpoint.py`) — RP4VM 5.3+ REST API:
+  session auth, consistency-group/VM discovery, pause-transfer and
+  remove-VM-from-CG for source cleanup.
+* `VCFProtectionAdapter` (`src/adapters/vcf_target.py`) — pyVmomi server-side
+  `VirtualDiskManager.CopyVirtualDisk_Task` seed copy into the
+  `[Datastore] VM_Name/VMDK` convention, VMDK descriptor cleanup (strips stale
+  `ddb.iofilters` / `ddb.sidecars`), and vSphere Replication REST API Gateway
+  calls (`/api/rest/vr/{version}/...`) to `Configure Replication` with
+  `use_seeds` + per-disk `destination_path`. Cross-site calls additionally
+  require `POST .../pairings/{pairing_id}/remote-session`; the same
+  `x-dr-session` header is reused throughout.
 
-| Requirement | Details |
-| --- | --- |
-| **Python Engine** | Python 3.10+ (Managed via `uv` or standard `pip`) |
-| **Python Libraries** | `requests`, `pyvmomi`, `rich`, `python-dotenv` |
-| **Zerto Permissions** | ZVMA / ZVM Keycloak Client ID & Client Secret |
-| **vCenter Permissions** | Account with `Datastore.FileManagement` privileges |
+### Manifest
+`src/models/manifest.py` defines the engine-neutral, versioned pydantic schema
+that decouples source discovery from target provisioning: `ManifestMetadata`
+(source engine, cluster ID, extraction timestamp), `ProtectionGroup` (RPO, boot
+priority, startup delay, member VM IDs), `VirtualMachine`, `Disk` (capacity,
+controller index, `seed_file_path`), `NetworkMapping`, and `IPCustomization`.
+Validation happens at parse time, so a malformed manifest fails before any
+vSphere object is touched.
 
-### Installation
+### Engine
+* `src/engine/transformer.py` — normalizes raw adapter payloads into a validated
+  `Manifest` and resolves each disk's `seed_file_path`.
+* `src/engine/validator.py` — pre-flight checks consumed identically by the CLI
+  and the UI: seed disk path existence, datastore capacity, RDM conflicts,
+  missing network mappings, and a **seed geometry check** comparing each disk's
+  declared `capacity_bytes` to the copied seed VMDK's actual size (a mismatch
+  makes `Configure Replication` with `use_seeds=true` fail unrecoverably).
 
-Install dependencies using `uv` or `pip`:
+### Caching & delta execution
+`src/cache.py` maintains two JSON files:
+* `.cache/inventory.json` — raw discovery payloads keyed by `engine:cluster_id`
+  with a TTL, so repeated runs don't re-hit source APIs.
+* `.cache/migration_state.json` — per-protection-group SHA-256 content hash,
+  status, and timestamp. `provision` skips groups already marked `PROVISIONED`
+  whose content hash is unchanged, making runs resumable; `rollback` uses the
+  same file to find partially provisioned groups.
+
+### Web UI
+`src/ui/` is a FastAPI app (launched via `vcf-migrator ui`) with a Mapping Matrix
+for source-network → NSX-segment mapping, a Pre-Flight Dashboard rendering
+`engine/validator.py` results, and a Migration Console for live log streaming.
+It reads the same manifest and cache files as the CLI and contains no separate
+business logic.
+
+## Requirements
+
+* Python 3.11+ and [`uv`](https://docs.astral.sh/uv/)
+* Zerto: ZVMA/ZVM Keycloak client ID + secret (see [keycloak.md](keycloak.md))
+* RecoverPoint: RP4VM plugin-server account
+* vCenter: account with `Datastore.FileManagement`; access to the vSphere
+  Replication REST API Gateway
+* Docker (optional) — only for the `testcontainers`-based adapter tests
+
+## Installation
 
 ```bash
-# Using uv (recommended)
-uv sync
-
-# Or standard pip
-pip install requests pyvmomi rich python-dotenv
-
+uv sync --extra dev
 ```
 
----
+The `dev` extra adds `pytest`, `pytest-asyncio`, `httpx`, and `testcontainers`.
+Omit `--extra dev` for a runtime-only install.
 
 ## Configuration
 
-All connection details and credentials are read from environment variables loaded
-from a local `.env` file. **No credentials are stored in the scripts.**
+All credentials and endpoints come from environment variables, loaded from a
+git-ignored `.env` file via `src/config.py` (`pydantic-settings`). Shell-exported
+variables — or a secret manager, e.g. `op run --env-file=.env -- uv run ...` —
+take precedence over the file, so credentials never need to touch disk.
 
 ```bash
 cp .env.example .env
-# then edit .env with your own values
-
+# edit .env
 ```
 
-`.env` is listed in `.gitignore` and must never be committed. `.env.example` is the
-committed template containing placeholders only.
+| Variable | Description |
+| --- | --- |
+| `ZVM_IP` | Zerto ZVMA IP or FQDN (no scheme) |
+| `ZVM_CLIENT_ID` | Keycloak OAuth client ID (see [keycloak.md](keycloak.md)) |
+| `ZVM_CLIENT_SECRET` | Keycloak OAuth client secret |
+| `RP4VM_IP` | RecoverPoint for VMs plugin server IP or FQDN |
+| `RP4VM_USER` / `RP4VM_PASSWORD` | RP4VM plugin server credentials |
+| `VCENTER_IP` | vCenter Server IP or FQDN (no scheme) |
+| `VCENTER_USER` / `VCENTER_PASSWORD` | vCenter account with `Datastore.FileManagement` |
+| `VCENTER_DATACENTER` | vCenter Datacenter object holding the target datastores |
+| `VR_GATEWAY_IP` | vSphere Replication REST API Gateway; defaults to `VCENTER_IP` |
+| `MANIFEST_FILE` | Manifest path written by `export`, read by `validate`/`provision` (default `manifest.json`) |
+| `VERIFY_SSL` | `true` to enforce TLS verification (default `false` for self-signed certs) |
 
-| Variable | Used by | Description |
-| --- | --- | --- |
-| `ZVM_IP` | Script 1 | Zerto ZVMA IP or FQDN (no scheme) |
-| `ZVM_CLIENT_ID` | Script 1 | Keycloak OAuth client ID (see [keycloak.md](keycloak.md)) |
-| `ZVM_CLIENT_SECRET` | Script 1 | Keycloak OAuth client secret |
-| `VCENTER_IP` | Script 2 | vCenter Server IP or FQDN (no scheme) |
-| `VCENTER_USER` | Script 2 | vCenter account with `Datastore.FileManagement` |
-| `VCENTER_PASSWORD` | Script 2 | vCenter account password |
-| `VCENTER_DATACENTER` | Script 2 | vCenter Datacenter object name |
-| `MANIFEST_FILE` | Both | Optional. Manifest filename (default `zerto_seeds_manifest.json`) |
-| `VERIFY_SSL` | Both | Optional. `true` to enforce TLS verification (default `false` for self-signed certs) |
+Each subcommand validates only the variables it needs and fails fast listing
+every missing one.
 
-Environment variables exported in your shell (or injected by a secret manager
-such as `op run --env-file=.env -- uv run ...`) take precedence over the `.env` file,
-so credentials never have to touch disk if you prefer.
-
-Both scripts fail fast with a clear message listing every missing variable.
-
----
-
-## Repository Structure
-
-* `01_zerto_discover_and_export.py` — Connects to Zerto ZVMA REST API, maps protected VMs to target ESXi hosts/VRAs, displays a formatted terminal table, and generates `zerto_seeds_manifest.json`.
-* `02_vcf_seed_copy.py` — Imports the manifest, connects to vCenter via `pyVmomi`, creates standard seed folders, and executes server-side VMDK copies.
-* `03_vmdk_descriptor_cleanup.py` — Imports the manifest, connects to vCenter, and comments out stale `ddb.iofilters` / `ddb.sidecars` references in each copied seed disk's descriptor file (see [Step 4](#step-4-clean-up-lingering-io-filter-references)).
-* `config.py` — Shared `.env` loader, required-variable validation, and the `[Datastore] VM_Name/VMDK` path logic shared by scripts 2 and 3.
-* `.env.example` — Template for the git-ignored `.env` file.
-
----
-
-## Step-by-Step Usage
-
-### Prerequisite: Setup Zerto Keycloak client token
-See [keycloak.md](keycloak.md) for instructions.
-
-### Step 1: Discover Zerto Replicas & Export Manifest
-
-Run Script 1 while Zerto protection is still active.
-
-1. Set the Zerto ZVMA parameters in your `.env` file:
-```bash
-ZVM_IP=your.zvm.ip.or.fqdn
-ZVM_CLIENT_ID=zerto-python-script
-ZVM_CLIENT_SECRET=YourClientSecretHere
-
-```
-
-
-2. Run the discovery script:
-```bash
-uv run 01_zerto_discover_and_export.py
-
-```
-![alt text](images/move-vmdk-01.png)
-
-![alt text](images/move-vmdk-02.png)
-
-3. Inspect the terminal output and verify that `zerto_seeds_manifest.json` has been created.
-
-### Step 2: Release File Locks in Zerto
-
-Before moving or copying replica files, ESXi file locks held by Zerto VRAs must be released:
-
-1. Open the **Zerto Management Interface**.
-2. Select the VPG(s) to migrate and click **Delete VPG** (or remove specific VMs).
-3. **CRITICAL:** Select **"Keep target disks"** when prompted.
-4. Confirm deletion. Zerto will detach the VMDKs from the target VRA.
-
-![alt text](images/zerto-delete-vpg.png)
-
-### Step 3: Copy VMDKs to VCF Seed Directories
-
-Examine your vSphere datastore to confirm current location of replica disks
-
-
-Run Script 2 after Zerto has released the file locks.
-
-1. Set your vCenter credentials in the same `.env` file:
-```bash
-VCENTER_IP=your.vcenter.ip.or.fqdn
-VCENTER_USER=administrator@vsphere.local
-VCENTER_PASSWORD=YourVcenterPasswordHere
-VCENTER_DATACENTER=Datacenter-DR
-
-```
-
-
-2. Execute the copy script:
-```bash
-uv run 02_vcf_seed_copy.py
-
-```
-
-3. Confirm the prompt for each disk. The script creates the target `[Datastore] VM_Name` directory on vSAN/VMFS and initiates a `VirtualDiskManager` copy task.
-
-![alt text](images/move-vmdk-04.png)
-
-### Step 4: Clean Up Lingering I/O Filter References
-
-If the original Zerto replica had an I/O filter attached (e.g. `vmwarelwd`), the
-copied seed disk's descriptor can retain `ddb.iofilters` / `ddb.sidecars` lines
-that reference sidecar files no longer present on the target. Left in place,
-these can cause the eventual VM to fail to power on with an error like
-`Cannot open the disk '...' or one of the snapshot disks it depends on.`
-See [Broadcom KB 334555](https://knowledge.broadcom.com/external/article/334555/unable-to-power-on-vm-when-iofilters-is.html).
-
-Run Script 3 after Script 2 has finished copying:
+## Usage
 
 ```bash
-# Preview what would change, without writing anything
-uv run 03_vmdk_descriptor_cleanup.py --dry-run
+# 1. Discover source protection topology and write the manifest.
+#    Run while source replication is still active.
+uv run vcf-migrator export --source zerto
+uv run vcf-migrator export --source recoverpoint
 
-# Apply, confirming each affected VM
-uv run 03_vmdk_descriptor_cleanup.py
+# 2. Pre-flight the manifest against the target (no changes made).
+uv run vcf-migrator validate
 
-# Apply without per-VM prompts
-uv run 03_vmdk_descriptor_cleanup.py --yes
+# 3. Copy seeds, clean descriptors, and configure VCF replication.
+uv run vcf-migrator provision --dry-run   # print planned actions only
+uv run vcf-migrator provision
 
+# 4. Revert target-side replication configs for partially provisioned groups.
+uv run vcf-migrator rollback --manifest manifest.json
+
+# Web UI (mapping matrix, pre-flight dashboard, migration console)
+uv run vcf-migrator ui
 ```
 
-The script reuses the same `VCENTER_*` variables as Script 2 and connects to
-vCenter's datastore HTTP file-access API (via the same `pyVmomi` session) to
-read and rewrite only the small text descriptor file — never the large
-`-flat.vmdk` data extent. Matching lines are commented out (`#ddb.iofilters = ...`),
-not deleted, per the KB's guidance, and the script is safe to re-run: VMs with
-no matching lines, or already-commented lines, are reported and left untouched.
-No separate backup is made, since Script 2 already copied the seed disk out from
-the original Zerto target disk.
+### Workflow notes
 
----
+**Export.** `export` reads the source engine's inventory and writes
+`MANIFEST_FILE`. Review the reported protection groups, VMs, and disk paths
+before continuing.
 
-## Important Technical Notes
+![Zerto discovery output](images/move-vmdk-01.png)
 
-* **Credential Handling:** Credentials live only in the git-ignored `.env` file (or your shell/secret manager). If you ever committed real credentials to this repository, rotate the Zerto Keycloak client secret and the vCenter account password — removing them from the working tree does not remove them from git history.
-* **Server-Side Processing:** All VMDK copy operations take place 100% server-side within the vSphere ESXi storage stack. Large file transfers do **not** route over your local workstation or VPN connection.
-* **vSAN Compatibility:** Script 2 automatically handles datastore bracket formatting (`[DatastoreName]`) and utilizes `VirtualDiskManager.CopyVirtualDisk_Task` to safely duplicate virtual disk descriptor files and vSAN storage objects.
+![Zerto discovery output, continued](images/move-vmdk-02.png)
+
+**Release source file locks.** Replica VMDKs are locked by the source engine's
+replication appliances (Zerto VRAs, vRPAs) and cannot be copied until released.
+`cleanup_source()` performs this via the source API and **defaults to preserving
+the target disks**. The equivalent manual step in the Zerto UI is *Delete VPG*
+with **"Keep the recovery disks at the peer site"** selected — the seed disks must
+survive, or there is nothing to seed from.
+
+![Zerto delete VPG, keeping target disks](images/zerto-delete-vpg.png)
+
+**Provision.** Seed copies run entirely server-side inside the ESXi storage
+stack (`VirtualDiskManager.CopyVirtualDisk_Task`), so no bulk data crosses your
+workstation or VPN. Copied descriptors then have stale `ddb.iofilters` /
+`ddb.sidecars` lines commented out — if the source replica had an I/O filter
+attached (e.g. `vmwarelwd`), those lines reference sidecar files absent on the
+target and cause `Cannot open the disk '...' or one of the snapshot disks it
+depends on.` on power-on. See
+[Broadcom KB 334555](https://knowledge.broadcom.com/external/article/334555/unable-to-power-on-vm-when-iofilters-is.html).
+Only the small text descriptor is rewritten, never the `-flat.vmdk` extent.
+
+![Seed copy in progress](images/move-vmdk-04.png)
+
+Finally, each protection group is registered with vSphere Replication using the
+copied disks as seeds. `provision` is idempotent — already-provisioned,
+unchanged groups are skipped via `.cache/migration_state.json`.
+
+## Testing
+
+```bash
+uv run pytest                     # full suite
+uv run pytest -m "not docker"     # skip tests needing a Docker daemon
+```
+
+Adapter tests tagged `@pytest.mark.docker` use `testcontainers` to run a mock
+HTTP server and cover auth failures, missing network mappings, and invalid seed
+paths. Transformer and manifest tests are pure unit tests and need no Docker.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

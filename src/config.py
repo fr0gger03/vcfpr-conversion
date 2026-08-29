@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # Shared
     manifest_file: str = "manifest.json"
     verify_ssl: bool = False
+    vr_pairing_id: str | None = None  # vSphere Replication REST API Gateway pairing ID
 
 
 def require(settings: Settings, *names: str) -> dict[str, str]:

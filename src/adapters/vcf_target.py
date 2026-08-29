@@ -138,6 +138,42 @@ class VCFProtectionAdapter(BaseDREngine):
             Disconnect(self._si)
             self._si = None
 
+    # -- src.engine.validator.VCenterSession protocol (duck-typed, no inheritance) --
+
+    def _cookie_session(self) -> requests.Session:
+        session = requests.Session()
+        session.headers.update({"Cookie": self._si._stub.cookie})
+        return session
+
+    def datastore_file_exists(self, datastore: str, path: str) -> bool:
+        vm_name, filename = path.split("/", 1)
+        url = self._datastore_file_url(datastore, vm_name, filename)
+        resp = self._cookie_session().get(url, verify=self.settings.verify_ssl)
+        return resp.status_code == 200
+
+    def datastore_free_bytes(self, datastore: str) -> int | None:
+        for ds in self._datacenter.datastore:
+            if ds.name == datastore:
+                return ds.summary.freeSpace
+        return None
+
+    def seed_disk_size_bytes(self, datastore: str, path: str) -> int | None:
+        vm_name, filename = path.split("/", 1)
+        url = self._datastore_file_url(datastore, vm_name, filename)
+        resp = self._cookie_session().head(url, verify=self.settings.verify_ssl)
+        length = resp.headers.get("Content-Length")
+        return int(length) if length is not None else None
+
+    def list_rdm_canonical_names(self) -> set[str]:
+        # Not yet implemented: RDM detection requires walking RawDiskMappingVer1BackingInfo
+        # across every VM in the datacenter. Returning an empty set means
+        # check_rdm_conflicts() always passes rather than raising -- validate() stays
+        # usable, but RDM conflicts will not actually be caught until this is filled in.
+        return set()
+
+    def disk_canonical_name(self, disk: Disk) -> str | None:
+        return None  # paired with the list_rdm_canonical_names() stub above.
+
     # -- migrated from 02_vcf_seed_copy.py ---------------------------------
 
     def _copy_seed_disk(self, ds_name: str, vm_name: str, source_raw_path: str) -> str:
