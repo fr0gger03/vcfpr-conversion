@@ -20,7 +20,7 @@ from pyVmomi import vim
 
 from src.adapters.base import BaseDREngine
 from src.cache import get_cached_inventory, set_cached_inventory
-from src.config import Settings, compute_dest_paths, require
+from src.config import DEFAULT_HTTP_TIMEOUT_SECONDS, Settings, compute_dest_paths, require
 from src.models.manifest import Disk, Manifest, ProtectionGroup
 
 VR_API_PREFIX = "/api/rest/vr/v1"
@@ -148,7 +148,7 @@ class VCFProtectionAdapter(BaseDREngine):
     def datastore_file_exists(self, datastore: str, path: str) -> bool:
         vm_name, filename = path.split("/", 1)
         url = self._datastore_file_url(datastore, vm_name, filename)
-        resp = self._cookie_session().get(url, verify=self.settings.verify_ssl)
+        resp = self._cookie_session().get(url, verify=self.settings.verify_ssl, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS)
         return resp.status_code == 200
 
     def datastore_free_bytes(self, datastore: str) -> int | None:
@@ -160,7 +160,7 @@ class VCFProtectionAdapter(BaseDREngine):
     def seed_disk_size_bytes(self, datastore: str, path: str) -> int | None:
         vm_name, filename = path.split("/", 1)
         url = self._datastore_file_url(datastore, vm_name, filename)
-        resp = self._cookie_session().head(url, verify=self.settings.verify_ssl)
+        resp = self._cookie_session().head(url, verify=self.settings.verify_ssl, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS)
         length = resp.headers.get("Content-Length")
         return int(length) if length is not None else None
 
@@ -210,10 +210,9 @@ class VCFProtectionAdapter(BaseDREngine):
     def _scrub_descriptor(self, ds_name: str, vm_name: str, dest_vmdk_path: str) -> None:
         vmdk_filename = dest_vmdk_path.rsplit("/", 1)[-1]
         url = self._datastore_file_url(ds_name, vm_name, vmdk_filename)
-        session = requests.Session()
-        session.headers.update({"Cookie": self._si._stub.cookie})
+        session = self._cookie_session()
 
-        resp = session.get(url, verify=self.settings.verify_ssl)
+        resp = session.get(url, verify=self.settings.verify_ssl, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS)
         if resp.status_code == 404:
             return
         resp.raise_for_status()
@@ -227,6 +226,7 @@ class VCFProtectionAdapter(BaseDREngine):
             data=new_text.encode("utf-8"),
             headers={"Content-Type": "application/octet-stream"},
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         put_resp.raise_for_status()
 
@@ -262,6 +262,7 @@ class VCFProtectionAdapter(BaseDREngine):
             f"https://{self._vr_gateway}{VR_API_PREFIX}/session",
             auth=(user, password),
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
         return resp.headers.get("x-dr-session") or resp.json().get("x-dr-session")
@@ -272,6 +273,7 @@ class VCFProtectionAdapter(BaseDREngine):
             auth=(target_user, target_password),
             headers={"x-dr-session": self._session_header},
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
         # There is only one session header throughout (no separate "remote" token);
@@ -284,6 +286,7 @@ class VCFProtectionAdapter(BaseDREngine):
             f"https://{self._vr_gateway}{VR_API_PREFIX}{path}",
             headers={"x-dr-session": self._session_header},
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
             **kwargs,
         )
         resp.raise_for_status()

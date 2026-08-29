@@ -14,7 +14,7 @@ import requests
 
 from src.adapters.base import BaseDREngine
 from src.cache import get_cached_inventory, set_cached_inventory
-from src.config import Settings, require
+from src.config import DEFAULT_HTTP_TIMEOUT_SECONDS, Settings, require
 from src.models.manifest import (
     Disk,
     Manifest,
@@ -46,6 +46,7 @@ class RecoverPointAdapter(BaseDREngine):
             f"{self.base_url}/sessions",
             json={"username": creds["rp4vm_user"], "password": creds["rp4vm_password"]},
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
         token = resp.json().get("token") or resp.headers.get("X-RP-SESSION-TOKEN")
@@ -65,7 +66,7 @@ class RecoverPointAdapter(BaseDREngine):
         # Best-effort based on CLI verb naming — confirm against
         # https://{plugin-server}/ui Swagger before production use.
         groups = self.session.get(
-            f"{self.base_url}/consistency-groups", verify=self.settings.verify_ssl
+            f"{self.base_url}/consistency-groups", verify=self.settings.verify_ssl, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS
         ).json()
         groups_list = groups.get("consistencyGroups", groups) if isinstance(groups, dict) else groups
 
@@ -74,7 +75,9 @@ class RecoverPointAdapter(BaseDREngine):
             group_id = group.get("id") or group.get("consistencyGroupUid")
             # Sub-resource batched detail fetch — best-effort path, confirm via Swagger.
             detail = self.session.get(
-                f"{self.base_url}/consistency-groups/{group_id}", verify=self.settings.verify_ssl
+                f"{self.base_url}/consistency-groups/{group_id}",
+                verify=self.settings.verify_ssl,
+                timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
             ).json()
             group_payload = {**group, **detail}
             inventory.append(group_payload)
@@ -143,6 +146,7 @@ class RecoverPointAdapter(BaseDREngine):
         resp = self.session.put(
             f"{self.base_url}/consistency-groups/{group_id}/pause-transfer",
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
 
@@ -156,5 +160,6 @@ class RecoverPointAdapter(BaseDREngine):
             f"{self.base_url}/consistency-groups/{group_id}",
             json={"preserveReplicaVolumes": keep_target_disks},
             verify=self.settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()

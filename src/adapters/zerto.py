@@ -8,7 +8,7 @@ import requests
 
 from src import cache
 from src.adapters.base import BaseDREngine
-from src.config import Settings, compute_dest_paths, require
+from src.config import DEFAULT_HTTP_TIMEOUT_SECONDS, Settings, compute_dest_paths, require
 from src.models.manifest import (
     Disk,
     Manifest,
@@ -65,6 +65,7 @@ class ZertoAdapter(BaseDREngine):
                 "client_secret": creds["zvm_client_secret"],
             },
             verify=self._settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
         try:
             payload = resp.json()
@@ -83,9 +84,10 @@ class ZertoAdapter(BaseDREngine):
 
         headers = self._headers()
         verify = self._settings.verify_ssl
-        vras = requests.get(f"{self._base_url}/v1/vras", headers=headers, verify=verify).json()
-        vms = requests.get(f"{self._base_url}/v1/vms", headers=headers, verify=verify).json()
-        volumes = requests.get(f"{self._base_url}/v1/volumes", headers=headers, verify=verify).json()
+        timeout = DEFAULT_HTTP_TIMEOUT_SECONDS
+        vras = requests.get(f"{self._base_url}/v1/vras", headers=headers, verify=verify, timeout=timeout).json()
+        vms = requests.get(f"{self._base_url}/v1/vms", headers=headers, verify=verify, timeout=timeout).json()
+        volumes = requests.get(f"{self._base_url}/v1/volumes", headers=headers, verify=verify, timeout=timeout).json()
 
         payload = [{"vras": vras, "vms": vms, "volumes": volumes}]
         cache.set_cached_inventory(cache_key, payload)
@@ -174,6 +176,7 @@ class ZertoAdapter(BaseDREngine):
             f"{self._base_url}/v1/vpgs/{group_id}/pause",
             headers=self._headers(),
             verify=self._settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         ).raise_for_status()
 
     def cleanup_source(self, group_id: str, *, keep_target_disks: bool = True) -> None:
@@ -187,4 +190,5 @@ class ZertoAdapter(BaseDREngine):
             headers=self._headers(),
             json=body,
             verify=self._settings.verify_ssl,
+            timeout=DEFAULT_HTTP_TIMEOUT_SECONDS,
         ).raise_for_status()

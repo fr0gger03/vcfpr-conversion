@@ -5,6 +5,10 @@ CLI subcommands need different subsets; use `require()` to validate per-command.
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Applied to every outbound requests call in the adapters so an unresponsive
+# Zerto/RP4VM/VR Gateway endpoint can't hang a CLI run indefinitely.
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30
+
 
 class ConfigError(RuntimeError):
     """Raised when a command's required configuration is missing."""

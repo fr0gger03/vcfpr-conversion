@@ -3,6 +3,8 @@
 mappings on a loaded manifest, persisting edits back to the manifest JSON file.
 """
 
+from html import escape
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -50,13 +52,13 @@ def mapping_matrix_view(manifest_path: str | None = None) -> str:
     path = manifest_path or default_manifest_path()
     rows = "".join(
         f"""<tr>
-              <td>{m.source_network}</td>
+              <td>{escape(m.source_network)}</td>
               <td colspan="3">
                 <form method="get" action="/mappings/update" style="display:flex;gap:4px;">
-                  <input type="hidden" name="manifest_path" value="{path}">
-                  <input type="hidden" name="source_network" value="{m.source_network}">
-                  <input name="target_nsx_segment_failover" value="{m.target_nsx_segment_failover}">
-                  <input name="target_nsx_segment_test" value="{m.target_nsx_segment_test or ''}">
+                  <input type="hidden" name="manifest_path" value="{escape(path)}">
+                  <input type="hidden" name="source_network" value="{escape(m.source_network)}">
+                  <input name="target_nsx_segment_failover" value="{escape(m.target_nsx_segment_failover)}">
+                  <input name="target_nsx_segment_test" value="{escape(m.target_nsx_segment_test or '')}">
                   <button type="submit">Save</button>
                 </form>
               </td>
@@ -66,7 +68,7 @@ def mapping_matrix_view(manifest_path: str | None = None) -> str:
     return f"""<html><head><title>Mapping Matrix</title></head>
 <body>
 <h1>Mapping Matrix</h1>
-<p>Manifest: {path}</p>
+<p>Manifest: {escape(path)}</p>
 <table border="1" cellpadding="4">
 <tr><th>Source Network</th><th colspan="3">Target NSX Segment (Failover / Test)</th></tr>
 {rows}
