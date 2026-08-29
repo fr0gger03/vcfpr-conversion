@@ -58,6 +58,12 @@ controller index, `seed_file_path`), `NetworkMapping`, and `IPCustomization`.
 Validation happens at parse time, so a malformed manifest fails before any
 vSphere object is touched.
 
+`Disk` also carries optional `source_datastore`/`source_raw_path`: adapters
+whose replicas must be physically relocated before they can serve as seeds
+(Zerto) populate these; adapters whose replicas already sit at their final
+destination (RecoverPoint) leave them unset. `provision` uses their presence
+to decide whether a given disk needs an actual seed copy first.
+
 ### Engine
 * `src/engine/transformer.py` — normalizes raw adapter payloads into a validated
   `Manifest` and resolves each disk's `seed_file_path`.
@@ -74,14 +80,26 @@ vSphere object is touched.
 * `.cache/migration_state.json` — per-protection-group SHA-256 content hash,
   status, and timestamp. `provision` skips groups already marked `PROVISIONED`
   whose content hash is unchanged, making runs resumable; `rollback` uses the
-  same file to find partially provisioned groups.
+  same file to find groups marked `FAILED` and revert them.
 
 ### Web UI
-`src/ui/` is a FastAPI app (launched via `vcf-migrator ui`) with a Mapping Matrix
-for source-network → NSX-segment mapping, a Pre-Flight Dashboard rendering
-`engine/validator.py` results, and a Migration Console for live log streaming.
-It reads the same manifest and cache files as the CLI and contains no separate
-business logic.
+`src/ui/` is a FastAPI app (launched via `vcf-migrator ui`) with three surfaces,
+each accepting an optional `?manifest_path=` query parameter (defaults to
+`$MANIFEST_FILE`):
+
+* **Mapping Matrix** — `GET /mappings` (HTML), `GET /api/mappings` (JSON),
+  `POST /api/mappings/{source_network}` (JSON update), `GET /mappings/update`
+  (browser-form edit). Edits persist back to the manifest file.
+* **Pre-Flight Dashboard** — `GET /preflight` (HTML), `GET /api/preflight`
+  (JSON), both backed by `engine/validator.run_preflight_checks()`.
+* **Migration Console** — `GET /console` (HTML + live view),
+  `GET /console/stream` (Server-Sent Events), `POST /console/publish`,
+  `POST /console/simulate` (canned demo progress messages).
+
+The dashboard currently uses a permissive stub vCenter session
+(`src/ui/vcenter_session.py`), so only the network-mapping check is
+meaningful there today; `validate`/`provision` in the CLI use the real
+pyVmomi-backed session and catch everything.
 
 ## Requirements
 
@@ -124,6 +142,7 @@ cp .env.example .env
 | `VCENTER_USER` / `VCENTER_PASSWORD` | vCenter account with `Datastore.FileManagement` |
 | `VCENTER_DATACENTER` | vCenter Datacenter object holding the target datastores |
 | `VR_GATEWAY_IP` | vSphere Replication REST API Gateway; defaults to `VCENTER_IP` |
+| `VR_PAIRING_ID` | VR Gateway site-pairing ID used by `provision` (or pass `--pairing-id`) |
 | `MANIFEST_FILE` | Manifest path written by `export`, read by `validate`/`provision` (default `manifest.json`) |
 | `VERIFY_SSL` | `true` to enforce TLS verification (default `false` for self-signed certs) |
 
@@ -151,6 +170,16 @@ uv run vcf-migrator rollback --manifest manifest.json
 # Web UI (mapping matrix, pre-flight dashboard, migration console)
 uv run vcf-migrator ui
 ```
+
+### CLI reference
+
+| Command | Key options | Notes |
+| --- | --- | --- |
+| `export` | `--source {zerto,recoverpoint}` (required), `--cluster-id` (default `default`) | Writes `MANIFEST_FILE` |
+| `validate` | `--manifest <path>` (defaults to `$MANIFEST_FILE`) | Exits non-zero if any check fails |
+| `provision` | `--manifest <path>`, `--dry-run`, `--pairing-id` (defaults to `$VR_PAIRING_ID`) | Copies seeds and configures replication per group; skips groups already `PROVISIONED` and unchanged; continues past per-group failures (marking them `FAILED`) and exits non-zero if any occurred |
+| `rollback` | `--manifest <path>` (required) | Reverts target replication config for every group cached as `FAILED` |
+| `ui` | `--host` (default `127.0.0.1`), `--port` (default `8000`) | Launches the FastAPI web UI |
 
 ### Workflow notes
 
@@ -185,7 +214,10 @@ Only the small text descriptor is rewritten, never the `-flat.vmdk` extent.
 
 Finally, each protection group is registered with vSphere Replication using the
 copied disks as seeds. `provision` is idempotent — already-provisioned,
-unchanged groups are skipped via `.cache/migration_state.json`.
+unchanged groups are skipped via `.cache/migration_state.json` — and resilient:
+a failure on one group is recorded as `FAILED` and doesn't stop the rest of the
+batch. Run `rollback --manifest <path>` afterward to revert any `FAILED` groups'
+target replication config.
 
 ## Testing
 
@@ -194,9 +226,13 @@ uv run pytest                     # full suite
 uv run pytest -m "not docker"     # skip tests needing a Docker daemon
 ```
 
-Adapter tests tagged `@pytest.mark.docker` use `testcontainers` to run a mock
-HTTP server and cover auth failures, missing network mappings, and invalid seed
-paths. Transformer and manifest tests are pure unit tests and need no Docker.
+`tests/test_zerto_adapter.py` and `tests/test_rp4vm_adapter.py` each have one
+`@pytest.mark.docker` test that uses `testcontainers` to spin up a throwaway
+HTTP container and confirm `authenticate()` surfaces failures instead of
+silently proceeding. Everything else — manifest mapping, `engine.transformer`,
+`engine.validator`'s checks (including missing-network-mapping and
+seed-geometry-mismatch cases), and the FastAPI UI (`tests/test_ui.py`) — is
+pure unit/`TestClient` testing and needs no Docker.
 
 ## License
 
